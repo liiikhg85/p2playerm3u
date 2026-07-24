@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: p2player-m3u
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      - key: PLAYLIST_BASE
+        value: http://ativaronline.pro
+
+      - key: ORIGIN_USERNAME
+        sync: false
+
+      - key: ORIGIN_PASSWORD
+        sync: false
+
+      - key: ACCESS_TOKEN
+        sync: false

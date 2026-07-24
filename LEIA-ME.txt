@@ -1,0 +1,52 @@
+P2 PLAYER M3U — RENDER
+
+ARQUIVOS
+- server.js
+- package.json
+- render.yaml
+
+COMO PUBLICAR
+
+1. Crie um repositório novo no GitHub, por exemplo:
+   p2player-m3u
+
+2. Envie os três arquivos deste ZIP para a RAIZ do repositório.
+
+3. No Render:
+   New > Blueprint
+
+4. Conecte o repositório p2player-m3u.
+
+5. O Render lerá render.yaml.
+
+6. Quando solicitar as variáveis, preencha:
+   ORIGIN_USERNAME = usuário da sua fonte
+   ORIGIN_PASSWORD = senha da sua fonte
+   ACCESS_TOKEN = crie um token longo e difícil de adivinhar
+
+   PLAYLIST_BASE já está configurado como:
+   http://ativaronline.pro
+
+7. Faça o deploy e aguarde ficar Live/Running.
+
+TESTES
+
+Saúde:
+https://SEU-SERVICO.onrender.com/health
+
+Deve responder algo parecido com:
+{"ok":true,"uptimeSeconds":123}
+
+Playlist:
+https://SEU-SERVICO.onrender.com/playlist?token=SEU_ACCESS_TOKEN
+
+Se funcionar, a resposta deverá ser a playlist M3U.
+
+IMPORTANTE
+
+Este serviço faz streaming do ARQUIVO M3U conforme ele chega da origem.
+Ele não reescreve os links internos da playlist e não faz proxy dos
+vídeos reproduzidos posteriormente pelos aplicativos.
+
+Depois que /playlist estiver funcionando, altere o m3u.php do site para
+validar o cliente e redirecionar para este endpoint.
