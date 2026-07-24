@@ -1,26 +1,53 @@
-P2 PLAYER M3U CACHE V3
+P2 PLAYER M3U — XTREAM V4
 
-Substitua server.js e package.json no mesmo repositório do GitHub.
-Aguarde o Render fazer o deploy.
+OBJETIVO
+Esta versão NÃO baixa get.php.
+Ela consulta a API Xtream e monta a M3U no próprio Render.
 
-MONITOR EM TEMPO REAL:
-https://p2player-m3u.onrender.com/monitor?token=SEU_ACCESS_TOKEN
+FLUXO
+1. Consulta autenticação/server_info.
+2. Consulta categorias.
+3. Consulta canais ao vivo.
+4. Consulta filmes/VOD.
+5. Consulta lista de séries.
+6. Cria imediatamente uma playlist BASIC com canais + filmes.
+7. Busca os episódios de cada série com concorrência limitada.
+8. Ao terminar, cria a playlist FULL com canais + filmes + episódios.
 
-O monitor atualiza automaticamente a cada 1 segundo e mostra:
-- MB recebidos
-- tamanho total, se a origem informar Content-Length
-- porcentagem
-- velocidade atual
-- velocidade média
-- tempo decorrido
-- horário do último chunk
-- estado do cache
+SUBSTITUIR NO GITHUB
+- server.js
+- package.json
 
-STATUS JSON:
-https://p2player-m3u.onrender.com/status?token=SEU_ACCESS_TOKEN
+Não precisa criar outro Render.
 
-PLAYLIST (somente depois de PRONTO/cacheReady=true):
-https://p2player-m3u.onrender.com/playlist?token=SEU_ACCESS_TOKEN
+VARIÁVEIS EXISTENTES
+PLAYLIST_BASE=http://ativaronline.pro
+ORIGIN_USERNAME=...
+ORIGIN_PASSWORD=...
+ACCESS_TOKEN=...
 
-O código não impõe limite artificial de velocidade. A velocidade final depende
-principalmente de quanto a origem consegue enviar para o Render.
+OPCIONAL
+SERIES_CONCURRENCY=8
+Você pode testar 8, 10 ou 12.
+Evite valores muito altos para não sobrecarregar/bloquear a API.
+
+STREAM_BASE
+Normalmente não precisa configurar.
+O sistema tenta descobrir o host/porta pelo server_info da Xtream API.
+Se os links gerados apontarem para host errado, crie manualmente:
+STREAM_BASE=http://HOST:PORT
+
+MONITOR
+https://p2player-m3u.onrender.com/monitor?token=SEU_TOKEN
+
+PLAYLIST BASIC
+Canais + filmes:
+https://p2player-m3u.onrender.com/playlist-basic?token=SEU_TOKEN
+
+PLAYLIST COMPLETA
+Canais + filmes + episódios:
+https://p2player-m3u.onrender.com/playlist?token=SEU_TOKEN
+
+DICA
+Assim que BASIC ficar pronta, teste ela em XCIPTV/IBO/Smarters.
+Isso permite validar os URLs gerados antes de esperar todas as séries.
