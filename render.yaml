@@ -21,13 +21,10 @@ services:
       - key: ORIGIN_PASSWORD
         value: "960561913"
 
-      - key: AUTH_URL
-        value: https://p2playerweb.gamer.gd/xtream-auth.php
+      - key: USERS_JSON_URL
+        value: https://p2playerweb.gamer.gd/usuarios.json
 
-      - key: AUTH_SECRET
-        value: p2playerproxy2026
-
-      - key: AUTH_CACHE_SECONDS
+      - key: USERS_CACHE_SECONDS
         value: "30"
 
       - key: REQUEST_TIMEOUT_MS

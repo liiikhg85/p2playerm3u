@@ -1,53 +1,28 @@
-P2 PLAYER M3U — XTREAM V4
+P2 PLAYER XTREAM GATEWAY — VALIDANDO usuarios.json
 
-OBJETIVO
-Esta versão NÃO baixa get.php.
-Ela consulta a API Xtream e monta a M3U no próprio Render.
-
-FLUXO
-1. Consulta autenticação/server_info.
-2. Consulta categorias.
-3. Consulta canais ao vivo.
-4. Consulta filmes/VOD.
-5. Consulta lista de séries.
-6. Cria imediatamente uma playlist BASIC com canais + filmes.
-7. Busca os episódios de cada série com concorrência limitada.
-8. Ao terminar, cria a playlist FULL com canais + filmes + episódios.
-
-SUBSTITUIR NO GITHUB
+Substitua no GitHub:
 - server.js
 - package.json
+- render.yaml
 
-Não precisa criar outro Render.
+Depois aguarde o Render redeployar.
 
-VARIÁVEIS EXISTENTES
-PLAYLIST_BASE=http://ativaronline.pro
-ORIGIN_USERNAME=...
-ORIGIN_PASSWORD=...
-ACCESS_TOKEN=...
+PRIMEIRO TESTE:
+https://p2player-m3u.onrender.com/users-debug
 
-OPCIONAL
-SERIES_CONCURRENCY=8
-Você pode testar 8, 10 ou 12.
-Evite valores muito altos para não sobrecarregar/bloquear a API.
+Se funcionar:
+{"ok":true,"count":...}
 
-STREAM_BASE
-Normalmente não precisa configurar.
-O sistema tenta descobrir o host/porta pelo server_info da Xtream API.
-Se os links gerados apontarem para host errado, crie manualmente:
-STREAM_BASE=http://HOST:PORT
+Se o InfinityFree bloquear o JSON, o endpoint mostrará:
+- HTTP
+- Content-Type
+- preview da resposta
 
-MONITOR
-https://p2player-m3u.onrender.com/monitor?token=SEU_TOKEN
+DEPOIS TESTE:
+https://p2player-m3u.onrender.com/player_api.php?username=USUARIO&password=SENHA
 
-PLAYLIST BASIC
-Canais + filmes:
-https://p2player-m3u.onrender.com/playlist-basic?token=SEU_TOKEN
+Se o cliente existir no usuarios.json e estiver ativo:
+"auth":1
+"status":"Active"
 
-PLAYLIST COMPLETA
-Canais + filmes + episódios:
-https://p2player-m3u.onrender.com/playlist?token=SEU_TOKEN
-
-DICA
-Assim que BASIC ficar pronta, teste ela em XCIPTV/IBO/Smarters.
-Isso permite validar os URLs gerados antes de esperar todas as séries.
+Nesta versão, xtream-auth.php NÃO é usado.
