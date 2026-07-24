@@ -77,10 +77,19 @@ async function validateClient(username, password) {
     const text = await response.text();
     let data = {};
     try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error(`Auth retornou resposta inválida (${response.status}).`);
-    }
+  data = JSON.parse(text);
+} catch {
+  console.error(
+    "[AUTH RESPONSE]",
+    "HTTP:", response.status,
+    "Content-Type:", response.headers.get("content-type"),
+    "Body:", text.slice(0, 500)
+  );
+
+  throw new Error(
+    `Auth retornou resposta inválida (${response.status}).`
+  );
+}
 
     const value = {
       ok: response.ok && data.ok === true,
