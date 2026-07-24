@@ -1,43 +1,28 @@
-P2 PLAYER XTREAM GATEWAY FTP V3
+V4 — CORREÇÃO DO CATÁLOGO
 
-Esta versão NÃO acessa usuarios.json por HTTP.
-Ela baixa o arquivo diretamente do FTP do InfinityFree e guarda em memória por 30 segundos.
+Problema encontrado:
+A origem responde categorias, mas get_live_streams/get_vod_streams/get_series SEM category_id é grande e falha no Render.
 
-ARQUIVOS PARA GITHUB/RENDER
-- server.js
-- package.json
-- render.yaml
+Correção:
+- quando o app pede tudo, o gateway busca as categorias;
+- consulta cada categoria separadamente;
+- junta os resultados;
+- guarda em cache por 5 minutos;
+- suporta GET e POST em /player_api.php;
+- login agora força status "Active";
+- live sempre redireciona para .m3u8 no host main.fashion.
 
-Não precisa mais usar:
-- xtream-auth.php
-- USERS_JSON_URL
+Substitua no GitHub:
+server.js
+package.json
+render.yaml
 
-PASSOS
-1. Substitua server.js, package.json e render.yaml no repositório do p2player-m3u.
-2. Faça commit.
-3. Aguarde o Render redeployar.
-4. Teste:
-   https://p2player-m3u.onrender.com/ftp-debug
+Depois teste:
+https://p2player-m3u.onrender.com/player_api.php?username=teste123&password=teste123&action=get_live_streams
 
-Resultado esperado:
-{"ok":true,"count":...,"path":"...usuarios.json"}
+Na primeira vez pode demorar porque ele monta o cache.
+Nos logs aparecerá:
+[AGG] live categoria=... itens=...
+[AGG] live pronto total=...
 
-5. Depois teste um cliente real:
-https://p2player-m3u.onrender.com/player_api.php?username=CLIENTE&password=SENHA
-
-Resultado esperado:
-"user_info":{"auth":1,"status":"Active",...}
-
-6. Depois XCIPTV / Smarters:
-Servidor: https://p2player-m3u.onrender.com
-Usuário: usuario do usuarios.json
-Senha: senha do usuarios.json
-
-CAMINHO FTP
-A versão tenta /htdocs/usuarios.json primeiro e possui caminhos alternativos automaticamente,
-caso o domínio esteja dentro de uma pasta específica.
-
-SEGURANÇA
-Este ZIP foi criado totalmente configurado a pedido do proprietário e contém credenciais.
-Use repositório PRIVADO. Depois de confirmar o funcionamento, é recomendável trocar senhas/tokens
-que tenham sido compartilhados e mover segredos para Environment Variables do Render.
+Depois teste novamente no XCIPTV.

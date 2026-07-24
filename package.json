@@ -1,16 +1,12 @@
 {
-  "name": "p2player-xtream-ftp",
-  "version": "3.0.0",
-  "private": true,
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "basic-ftp": "^5.0.5",
-    "express": "^4.21.2"
+  "name":"p2player-xtream-ftp",
+  "version":"4.0.0",
+  "private":true,
+  "main":"server.js",
+  "scripts":{"start":"node server.js"},
+  "engines":{"node":">=20"},
+  "dependencies":{
+    "basic-ftp":"^5.0.5",
+    "express":"^4.21.2"
   }
 }
