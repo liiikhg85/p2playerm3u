@@ -1,34 +1,34 @@
 const express = require("express");
+const ftp = require("basic-ftp");
+const fs = require("fs/promises");
+const os = require("os");
+const path = require("path");
 
 const app = express();
 const PORT = Number(process.env.PORT || 10000);
 
-const ORIGIN_BASE = String(process.env.ORIGIN_BASE || "http://ativaronline.pro").replace(/\/+$/, "");
-const ORIGIN_STREAM_BASE = String(process.env.ORIGIN_STREAM_BASE || ORIGIN_BASE).replace(/\/+$/, "");
+const ORIGIN_API_BASE = String(process.env.ORIGIN_API_BASE || "http://ativaronline.pro").replace(/\/+$/, "");
+const LIVE_STREAM_BASE = String(process.env.LIVE_STREAM_BASE || "http://main.fashion:80").replace(/\/+$/, "");
+const VOD_STREAM_BASE = String(process.env.VOD_STREAM_BASE || ORIGIN_API_BASE).replace(/\/+$/, "");
+
 const ORIGIN_USERNAME = String(process.env.ORIGIN_USERNAME || "");
 const ORIGIN_PASSWORD = String(process.env.ORIGIN_PASSWORD || "");
 
-const USERS_JSON_URL = String(
-  process.env.USERS_JSON_URL || "https://p2playerweb.gamer.gd/usuarios.json"
-).trim();
+const FTP_HOST = String(process.env.FTP_HOST || "ftpupload.net");
+const FTP_PORT = Number(process.env.FTP_PORT || 21);
+const FTP_USER = String(process.env.FTP_USER || "");
+const FTP_PASSWORD = String(process.env.FTP_PASSWORD || "");
+const FTP_USERS_PATH = String(process.env.FTP_USERS_PATH || "/htdocs/usuarios.json");
 
-const USERS_CACHE_SECONDS = Math.max(
-  5,
-  Math.min(300, Number(process.env.USERS_CACHE_SECONDS || 30))
-);
-
-const REQUEST_TIMEOUT_MS = Math.max(
-  5000,
-  Number(process.env.REQUEST_TIMEOUT_MS || 60000)
-);
+const USERS_CACHE_SECONDS = Math.max(5, Math.min(300, Number(process.env.USERS_CACHE_SECONDS || 30)));
+const REQUEST_TIMEOUT_MS = Math.max(5000, Number(process.env.REQUEST_TIMEOUT_MS || 60000));
 
 let usersCache = {
   expiresAt: 0,
   usuarios: null,
   lastError: null,
-  lastStatus: null,
-  lastContentType: null,
-  lastPreview: null
+  lastPath: null,
+  lastLoadedAt: null
 };
 
 app.disable("x-powered-by");
@@ -42,102 +42,96 @@ app.use((req, res, next) => {
   next();
 });
 
-async function fetchUsersJson(force = false) {
+function candidateFtpPaths() {
+  const paths = [
+    FTP_USERS_PATH,
+    "/htdocs/usuarios.json",
+    "/p2playerweb.gamer.gd/htdocs/usuarios.json",
+    "htdocs/usuarios.json",
+    "p2playerweb.gamer.gd/htdocs/usuarios.json",
+    "/usuarios.json"
+  ];
+  return [...new Set(paths.filter(Boolean))];
+}
+
+async function downloadUsersFromFtp(force = false) {
   const now = Date.now();
 
-  if (
-    !force &&
-    Array.isArray(usersCache.usuarios) &&
-    usersCache.expiresAt > now
-  ) {
+  if (!force && Array.isArray(usersCache.usuarios) && usersCache.expiresAt > now) {
     return usersCache.usuarios;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  if (!FTP_HOST || !FTP_USER || !FTP_PASSWORD) {
+    throw new Error("FTP não configurado.");
+  }
+
+  const client = new ftp.Client(30000);
+  client.ftp.verbose = false;
+
+  const tempFile = path.join(os.tmpdir(), `p2-users-${process.pid}-${Date.now()}.json`);
+  let lastError = null;
 
   try {
-    const response = await fetch(USERS_JSON_URL, {
-      method: "GET",
-      headers: {
-        "accept": "application/json,text/plain,*/*",
-        "accept-encoding": "identity",
-        "cache-control": "no-cache",
-        "user-agent": "Mozilla/5.0 (compatible; P2PlayerXtream/2.0)"
-      },
-      redirect: "follow",
-      signal: controller.signal
+    await client.access({
+      host: FTP_HOST,
+      port: FTP_PORT,
+      user: FTP_USER,
+      password: FTP_PASSWORD,
+      secure: false
     });
 
-    const text = await response.text();
+    for (const remotePath of candidateFtpPaths()) {
+      try {
+        await client.downloadTo(tempFile, remotePath);
 
-    usersCache.lastStatus = response.status;
-    usersCache.lastContentType = response.headers.get("content-type") || "";
-    usersCache.lastPreview = text.slice(0, 500);
+        const raw = await fs.readFile(tempFile, "utf8");
+        const json = JSON.parse(raw);
 
-    let json;
+        if (!json || !Array.isArray(json.usuarios)) {
+          throw new Error("JSON sem campo usuarios.");
+        }
 
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new Error(
-        `usuarios.json nao retornou JSON valido. HTTP ${response.status}, Content-Type ${usersCache.lastContentType}`
-      );
+        usersCache = {
+          expiresAt: now + USERS_CACHE_SECONDS * 1000,
+          usuarios: json.usuarios,
+          lastError: null,
+          lastPath: remotePath,
+          lastLoadedAt: new Date().toISOString()
+        };
+
+        console.log(`[FTP] usuarios carregados=${json.usuarios.length} caminho=${remotePath}`);
+        return json.usuarios;
+      } catch (error) {
+        lastError = error;
+      }
     }
 
-    if (
-      !json ||
-      !Array.isArray(json.usuarios)
-    ) {
-      throw new Error("usuarios.json nao possui o campo usuarios em formato de lista.");
-    }
-
-    usersCache = {
-      ...usersCache,
-      expiresAt: now + USERS_CACHE_SECONDS * 1000,
-      usuarios: json.usuarios,
-      lastError: null
-    };
-
-    console.log(
-      `[USERS] HTTP ${response.status} | ${usersCache.lastContentType} | usuarios=${json.usuarios.length}`
-    );
-
-    return json.usuarios;
-
+    throw lastError || new Error("usuarios.json não encontrado via FTP.");
   } catch (error) {
     usersCache.lastError = String(error?.message || error);
-
-    console.error(
-      "[USERS]",
-      usersCache.lastError,
-      "| preview:",
-      usersCache.lastPreview || "-"
-    );
-
+    console.error("[FTP]", usersCache.lastError);
     throw error;
   } finally {
-    clearTimeout(timeout);
+    client.close();
+    await fs.unlink(tempFile).catch(() => {});
   }
 }
 
 function isExpired(validade) {
   const v = String(validade || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
-
   const end = new Date(`${v}T23:59:59-03:00`);
   return Number.isNaN(end.getTime()) || Date.now() > end.getTime();
 }
 
 async function validateClient(username, password) {
-  const usuarios = await fetchUsersJson();
+  const usuarios = await downloadUsersFromFtp();
 
   const u = String(username || "").trim();
   const p = String(password || "");
 
   const cliente = usuarios.find(item => {
     if (!item || typeof item !== "object") return false;
-
     return (
       String(item.usuario || "").toLowerCase() === u.toLowerCase() &&
       String(item.senha || "") === p
@@ -145,11 +139,7 @@ async function validateClient(username, password) {
   });
 
   if (!cliente) {
-    return {
-      ok: false,
-      status: "Disabled",
-      message: "Usuario ou senha invalidos."
-    };
+    return { ok: false, status: "Disabled", message: "Usuário ou senha inválidos." };
   }
 
   const status = String(cliente.status || "ativo").trim().toLowerCase();
@@ -158,11 +148,7 @@ async function validateClient(username, password) {
     ["bloqueado", "inativo", "suspenso", "desativado"].includes(status);
 
   if (blocked) {
-    return {
-      ok: false,
-      status: "Disabled",
-      message: "Conta bloqueada."
-    };
+    return { ok: false, status: "Disabled", message: "Conta bloqueada." };
   }
 
   if (isExpired(cliente.validade)) {
@@ -177,9 +163,8 @@ async function validateClient(username, password) {
   return {
     ok: true,
     status: "Active",
-    message: "Acesso autorizado.",
-    validade: String(cliente.validade || ""),
     nome: String(cliente.nome || ""),
+    validade: String(cliente.validade || ""),
     tipo_conta: String(cliente.tipo_conta || "cliente")
   };
 }
@@ -203,36 +188,39 @@ async function originJson(action = "", extra = {}) {
 
   try {
     const response = await fetch(
-      `${ORIGIN_BASE}/player_api.php?${params.toString()}`,
+      `${ORIGIN_API_BASE}/player_api.php?${params.toString()}`,
       {
         headers: {
-          "accept": "application/json,*/*",
+          accept: "application/json,*/*",
           "accept-encoding": "identity",
-          "user-agent": "Mozilla/5.0 (compatible; P2PlayerXtream/2.0)"
+          "user-agent": "Mozilla/5.0 (compatible; P2PlayerXtreamFTP/3.0)"
         },
         redirect: "follow",
         signal: controller.signal
       }
     );
 
-    if (!response.ok) {
-      throw new Error(`Origem HTTP ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`Origem HTTP ${response.status}`);
 
     const text = await response.text();
-
     try {
       return JSON.parse(text);
     } catch {
-      throw new Error(`Origem retornou JSON invalido (${text.length} bytes).`);
+      throw new Error(`Origem retornou JSON inválido (${text.length} bytes).`);
     }
-
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function disabledLogin(username, password, req, message = "Conta invalida ou vencida.") {
+function credentials(req) {
+  return {
+    username: String(req.query.username || req.params.username || "").trim(),
+    password: String(req.query.password || req.params.password || "")
+  };
+}
+
+function disabledLogin(username, password, req, message = "Conta inválida ou vencida.") {
   const now = Math.floor(Date.now() / 1000);
 
   return {
@@ -262,18 +250,15 @@ function disabledLogin(username, password, req, message = "Conta invalida ou ven
   };
 }
 
-function rewriteLoginResponse(originData, username, password, req, client) {
+function activeLogin(originData, username, password, req, client) {
   const now = Math.floor(Date.now() / 1000);
   const originUser = originData?.user_info || {};
   const originServer = originData?.server_info || {};
 
   let expiry = 0;
-
   if (client.validade) {
     const dt = new Date(`${client.validade}T23:59:59-03:00`);
-    if (!Number.isNaN(dt.getTime())) {
-      expiry = Math.floor(dt.getTime() / 1000);
-    }
+    if (!Number.isNaN(dt.getTime())) expiry = Math.floor(dt.getTime() / 1000);
   }
 
   return {
@@ -286,7 +271,6 @@ function rewriteLoginResponse(originData, username, password, req, client) {
       auth: 1,
       status: "Active",
       exp_date: expiry > 0 ? String(expiry) : String(originUser.exp_date || "0"),
-      is_trial: String(originUser.is_trial || "0"),
       active_cons: "0",
       max_connections: "3",
       allowed_output_formats: Array.isArray(originUser.allowed_output_formats)
@@ -307,58 +291,37 @@ function rewriteLoginResponse(originData, username, password, req, client) {
   };
 }
 
-function credentials(req) {
-  return {
-    username: String(req.query.username || req.params.username || "").trim(),
-    password: String(req.query.password || req.params.password || "")
-  };
-}
-
 app.get("/", (_req, res) => {
   res.json({
     ok: true,
-    service: "P2 Player Xtream Gateway JSON",
-    configured: Boolean(
-      ORIGIN_BASE &&
-      ORIGIN_USERNAME &&
-      ORIGIN_PASSWORD &&
-      USERS_JSON_URL
-    ),
-    usersJsonUrl: USERS_JSON_URL,
-    usersCache: {
+    service: "P2 Player Xtream Gateway FTP V3",
+    ftpCache: {
       loaded: Array.isArray(usersCache.usuarios),
       count: Array.isArray(usersCache.usuarios) ? usersCache.usuarios.length : 0,
-      lastError: usersCache.lastError,
-      lastStatus: usersCache.lastStatus,
-      lastContentType: usersCache.lastContentType
+      lastPath: usersCache.lastPath,
+      lastLoadedAt: usersCache.lastLoadedAt,
+      lastError: usersCache.lastError
     }
   });
 });
 
 app.get("/health", (_req, res) => {
-  res.json({
-    ok: true,
-    uptimeSeconds: Math.floor(process.uptime())
-  });
+  res.json({ ok: true, uptimeSeconds: Math.floor(process.uptime()) });
 });
 
-app.get("/users-debug", async (_req, res) => {
+app.get("/ftp-debug", async (_req, res) => {
   try {
-    const usuarios = await fetchUsersJson(true);
-
-    return res.json({
+    const usuarios = await downloadUsersFromFtp(true);
+    res.json({
       ok: true,
       count: usuarios.length,
-      lastStatus: usersCache.lastStatus,
-      lastContentType: usersCache.lastContentType
+      path: usersCache.lastPath,
+      loadedAt: usersCache.lastLoadedAt
     });
   } catch (error) {
-    return res.status(502).json({
+    res.status(502).json({
       ok: false,
-      error: usersCache.lastError,
-      lastStatus: usersCache.lastStatus,
-      lastContentType: usersCache.lastContentType,
-      preview: usersCache.lastPreview
+      error: usersCache.lastError || String(error?.message || error)
     });
   }
 });
@@ -371,31 +334,13 @@ app.get("/player_api.php", async (req, res) => {
     const client = await validateClient(username, password);
 
     if (!client.ok) {
-      if (!action) {
-        return res.status(200).json(
-          disabledLogin(
-            username,
-            password,
-            req,
-            client.message || "Conta invalida ou vencida."
-          )
-        );
-      }
-
+      if (!action) return res.json(disabledLogin(username, password, req, client.message));
       return res.status(401).json([]);
     }
 
     if (!action) {
       const origin = await originJson("");
-      return res.json(
-        rewriteLoginResponse(
-          origin,
-          username,
-          password,
-          req,
-          client
-        )
-      );
+      return res.json(activeLogin(origin, username, password, req, client));
     }
 
     const allowed = new Set([
@@ -412,67 +357,36 @@ app.get("/player_api.php", async (req, res) => {
     ]);
 
     if (!allowed.has(action)) {
-      return res.status(400).json({
-        error: "Acao nao suportada."
-      });
+      return res.status(400).json({ error: "Ação não suportada." });
     }
 
     const extra = {};
-
-    for (const key of [
-      "category_id",
-      "series_id",
-      "vod_id",
-      "stream_id",
-      "limit",
-      "start"
-    ]) {
-      if (
-        req.query[key] !== undefined &&
-        req.query[key] !== ""
-      ) {
+    for (const key of ["category_id", "series_id", "vod_id", "stream_id", "limit", "start"]) {
+      if (req.query[key] !== undefined && req.query[key] !== "") {
         extra[key] = req.query[key];
       }
     }
 
-    const data = await originJson(action, extra);
-    return res.json(data);
-
+    return res.json(await originJson(action, extra));
   } catch (error) {
-    console.error(
-      "[player_api]",
-      action || "login",
-      error?.message || error
-    );
+    console.error("[player_api]", action || "login", error?.message || error);
 
     if (!action) {
-      return res.status(200).json(
-        disabledLogin(
-          username,
-          password,
-          req,
-          "Servidor temporariamente indisponivel."
-        )
+      return res.json(
+        disabledLogin(username, password, req, "Servidor temporariamente indisponível.")
       );
     }
 
-    return res.status(502).json({
-      error: "Falha temporaria ao consultar catalogo."
-    });
+    return res.status(502).json({ error: "Falha temporária ao consultar catálogo." });
   }
 });
 
+/* Alguns clientes Xtream pedem get.php. */
 app.get("/get.php", async (req, res) => {
   const { username, password } = credentials(req);
-
   try {
     const client = await validateClient(username, password);
-
-    if (!client.ok) {
-      return res.status(401).type("text/plain").send(
-        "Conta invalida ou vencida."
-      );
-    }
+    if (!client.ok) return res.status(401).send("Conta inválida ou vencida.");
 
     const params = new URLSearchParams({
       username: ORIGIN_USERNAME,
@@ -481,48 +395,26 @@ app.get("/get.php", async (req, res) => {
       output: String(req.query.output || "m3u8")
     });
 
-    return res.redirect(
-      302,
-      `${ORIGIN_BASE}/get.php?${params.toString()}`
-    );
-
+    return res.redirect(302, `${ORIGIN_API_BASE}/get.php?${params.toString()}`);
   } catch (error) {
-    console.error("[get.php]", error?.message || error);
-
-    return res.status(502).type("text/plain").send(
-      "Falha temporaria."
-    );
+    return res.status(502).send("Falha temporária.");
   }
 });
 
 app.get("/xmltv.php", async (req, res) => {
   const { username, password } = credentials(req);
-
   try {
     const client = await validateClient(username, password);
-
-    if (!client.ok) {
-      return res.status(401).type("text/plain").send(
-        "Conta invalida ou vencida."
-      );
-    }
+    if (!client.ok) return res.status(401).send("Conta inválida ou vencida.");
 
     const params = new URLSearchParams({
       username: ORIGIN_USERNAME,
       password: ORIGIN_PASSWORD
     });
 
-    return res.redirect(
-      302,
-      `${ORIGIN_BASE}/xmltv.php?${params.toString()}`
-    );
-
+    return res.redirect(302, `${ORIGIN_API_BASE}/xmltv.php?${params.toString()}`);
   } catch (error) {
-    console.error("[xmltv]", error?.message || error);
-
-    return res.status(502).type("text/plain").send(
-      "Falha temporaria."
-    );
+    return res.status(502).send("Falha temporária.");
   }
 });
 
@@ -531,71 +423,50 @@ async function streamRedirect(req, res, kind) {
 
   try {
     const client = await validateClient(username, password);
+    if (!client.ok) return res.status(401).send("Conta inválida ou vencida.");
 
-    if (!client.ok) {
-      return res.status(401).type("text/plain").send(
-        "Conta invalida ou vencida."
-      );
+    const id = String(req.params.id || "").replace(/[^0-9A-Za-z_-]/g, "");
+    const ext = String(req.params.ext || (kind === "live" ? "m3u8" : "mp4"))
+      .replace(/[^0-9A-Za-z]/g, "");
+
+    if (!id) return res.status(400).send("Stream inválido.");
+
+    let target;
+
+    if (kind === "live") {
+      /* Seu servidor ao vivo usa /usuario/senha/id.m3u8, sem /live/. */
+      target =
+        `${LIVE_STREAM_BASE}/` +
+        `${encodeURIComponent(ORIGIN_USERNAME)}/` +
+        `${encodeURIComponent(ORIGIN_PASSWORD)}/` +
+        `${encodeURIComponent(id)}.${ext}`;
+    } else {
+      target =
+        `${VOD_STREAM_BASE}/${kind}/` +
+        `${encodeURIComponent(ORIGIN_USERNAME)}/` +
+        `${encodeURIComponent(ORIGIN_PASSWORD)}/` +
+        `${encodeURIComponent(id)}.${ext}`;
     }
-
-    const id = String(req.params.id || "")
-      .replace(/[^0-9A-Za-z_-]/g, "");
-
-    const ext = String(
-      req.params.ext ||
-      (kind === "live" ? "m3u8" : "mp4")
-    ).replace(/[^0-9A-Za-z]/g, "");
-
-    if (!id) {
-      return res.status(400).type("text/plain").send(
-        "Stream invalido."
-      );
-    }
-
-    const target =
-      `${ORIGIN_STREAM_BASE}/${kind}/` +
-      `${encodeURIComponent(ORIGIN_USERNAME)}/` +
-      `${encodeURIComponent(ORIGIN_PASSWORD)}/` +
-      `${encodeURIComponent(id)}.${ext}`;
 
     return res.redirect(302, target);
-
   } catch (error) {
-    console.error(
-      `[${kind}]`,
-      error?.message || error
-    );
-
-    return res.status(502).type("text/plain").send(
-      "Falha temporaria."
-    );
+    console.error(`[${kind}]`, error?.message || error);
+    return res.status(502).send("Falha temporária.");
   }
 }
 
-app.get(
-  "/live/:username/:password/:id.:ext",
-  (req, res) => streamRedirect(req, res, "live")
+app.get("/live/:username/:password/:id.:ext", (req, res) =>
+  streamRedirect(req, res, "live")
+);
+app.get("/movie/:username/:password/:id.:ext", (req, res) =>
+  streamRedirect(req, res, "movie")
+);
+app.get("/series/:username/:password/:id.:ext", (req, res) =>
+  streamRedirect(req, res, "series")
 );
 
-app.get(
-  "/movie/:username/:password/:id.:ext",
-  (req, res) => streamRedirect(req, res, "movie")
-);
-
-app.get(
-  "/series/:username/:password/:id.:ext",
-  (req, res) => streamRedirect(req, res, "series")
-);
-
-app.use((_req, res) => {
-  res.status(404).json({
-    ok: false,
-    error: "Rota nao encontrada."
-  });
-});
+app.use((_req, res) => res.status(404).json({ ok: false, error: "Rota não encontrada." }));
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `[server] P2 Player Xtream Gateway JSON ativo na porta ${PORT}`
-  );
+  console.log(`[server] P2 Player Xtream FTP V3 ativo na porta ${PORT}`);
 });

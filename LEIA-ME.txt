@@ -1,28 +1,43 @@
-P2 PLAYER XTREAM GATEWAY — VALIDANDO usuarios.json
+P2 PLAYER XTREAM GATEWAY FTP V3
 
-Substitua no GitHub:
+Esta versão NÃO acessa usuarios.json por HTTP.
+Ela baixa o arquivo diretamente do FTP do InfinityFree e guarda em memória por 30 segundos.
+
+ARQUIVOS PARA GITHUB/RENDER
 - server.js
 - package.json
 - render.yaml
 
-Depois aguarde o Render redeployar.
+Não precisa mais usar:
+- xtream-auth.php
+- USERS_JSON_URL
 
-PRIMEIRO TESTE:
-https://p2player-m3u.onrender.com/users-debug
+PASSOS
+1. Substitua server.js, package.json e render.yaml no repositório do p2player-m3u.
+2. Faça commit.
+3. Aguarde o Render redeployar.
+4. Teste:
+   https://p2player-m3u.onrender.com/ftp-debug
 
-Se funcionar:
-{"ok":true,"count":...}
+Resultado esperado:
+{"ok":true,"count":...,"path":"...usuarios.json"}
 
-Se o InfinityFree bloquear o JSON, o endpoint mostrará:
-- HTTP
-- Content-Type
-- preview da resposta
+5. Depois teste um cliente real:
+https://p2player-m3u.onrender.com/player_api.php?username=CLIENTE&password=SENHA
 
-DEPOIS TESTE:
-https://p2player-m3u.onrender.com/player_api.php?username=USUARIO&password=SENHA
+Resultado esperado:
+"user_info":{"auth":1,"status":"Active",...}
 
-Se o cliente existir no usuarios.json e estiver ativo:
-"auth":1
-"status":"Active"
+6. Depois XCIPTV / Smarters:
+Servidor: https://p2player-m3u.onrender.com
+Usuário: usuario do usuarios.json
+Senha: senha do usuarios.json
 
-Nesta versão, xtream-auth.php NÃO é usado.
+CAMINHO FTP
+A versão tenta /htdocs/usuarios.json primeiro e possui caminhos alternativos automaticamente,
+caso o domínio esteja dentro de uma pasta específica.
+
+SEGURANÇA
+Este ZIP foi criado totalmente configurado a pedido do proprietário e contém credenciais.
+Use repositório PRIVADO. Depois de confirmar o funcionamento, é recomendável trocar senhas/tokens
+que tenham sido compartilhados e mover segredos para Environment Variables do Render.
