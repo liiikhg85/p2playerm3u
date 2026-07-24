@@ -1,386 +1,387 @@
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
 
 const app = express();
 const PORT = Number(process.env.PORT || 10000);
 
-const PLAYLIST_BASE = String(process.env.PLAYLIST_BASE || "").replace(/\/+$/, "");
-const STREAM_BASE_ENV = String(process.env.STREAM_BASE || "").replace(/\/+$/, "");
+const ORIGIN_BASE = String(process.env.ORIGIN_BASE || "http://ativaronline.pro").replace(/\/+$/, "");
+const ORIGIN_STREAM_BASE = String(process.env.ORIGIN_STREAM_BASE || ORIGIN_BASE).replace(/\/+$/, "");
 const ORIGIN_USERNAME = String(process.env.ORIGIN_USERNAME || "");
 const ORIGIN_PASSWORD = String(process.env.ORIGIN_PASSWORD || "");
-const ACCESS_TOKEN = String(process.env.ACCESS_TOKEN || "");
+const AUTH_URL = String(process.env.AUTH_URL || "").trim();
+const AUTH_SECRET = String(process.env.AUTH_SECRET || "").trim();
 
-const API_TIMEOUT_MS = 180000; // 3 minutos para listagens grandes
-const SERIES_TIMEOUT_MS = 90000;
-const SERIES_CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.SERIES_CONCURRENCY || 6)));
-const REFRESH_MS = 6 * 60 * 60 * 1000;
+const AUTH_CACHE_SECONDS = Math.max(5, Math.min(300, Number(process.env.AUTH_CACHE_SECONDS || 30)));
+const REQUEST_TIMEOUT_MS = Math.max(5000, Number(process.env.REQUEST_TIMEOUT_MS || 60000));
 
-const DIR = "/tmp/p2player-v5";
-const BASIC_FILE = path.join(DIR, "basic.m3u");
-const FULL_FILE = path.join(DIR, "full.m3u");
-const BUILD_FILE = path.join(DIR, "building.m3u");
-fs.mkdirSync(DIR, { recursive: true });
+const authCache = new Map();
 
-let state = {
-  phase: "iniciando",
-  building: false,
-  basicReady: false,
-  fullReady: false,
-  lastError: null,
-  startedAt: null,
-  finishedAt: null,
-  streamBase: null,
-  live: { total: 0, written: 0 },
-  movies: { total: 0, written: 0 },
-  series: { total: 0, processed: 0, failed: 0, episodesWritten: 0 },
-  basicBytes: 0,
-  fullBytes: 0
-};
+app.disable("x-powered-by");
+app.set("trust proxy", true);
 
-function authorized(req) {
-  if (!ACCESS_TOKEN) return true;
-  const token = req.query.token || req.get("x-access-token") ||
-    (req.get("authorization") || "").replace(/^Bearer\s+/i, "");
-  return token === ACCESS_TOKEN;
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Origin, Accept, Content-Type, Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+function publicBase(req) {
+  const proto = req.get("x-forwarded-proto") || req.protocol || "https";
+  return `${proto}://${req.get("host")}`;
 }
 
-function apiUrl(action = "", extra = {}) {
-  const p = new URLSearchParams({
-    username: ORIGIN_USERNAME,
-    password: ORIGIN_PASSWORD
-  });
-  if (action) p.set("action", action);
-  for (const [k,v] of Object.entries(extra)) {
-    if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+function cacheKey(username, password) {
+  return `${username}\n${password}`;
+}
+
+async function validateClient(username, password) {
+  username = String(username || "").trim();
+  password = String(password || "");
+
+  if (!username || !password) {
+    return { ok: false, status: "Disabled", message: "Credenciais ausentes." };
   }
-  return `${PLAYLIST_BASE}/player_api.php?${p.toString()}`;
-}
 
-async function fetchJson(action = "", extra = {}, timeoutMs = API_TIMEOUT_MS) {
+  const key = cacheKey(username, password);
+  const now = Date.now();
+  const cached = authCache.get(key);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  if (!AUTH_URL || !AUTH_SECRET) {
+    throw new Error("AUTH_URL/AUTH_SECRET não configurados.");
+  }
+
+  const url = new URL(AUTH_URL);
+  url.searchParams.set("username", username);
+  url.searchParams.set("password", password);
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
   try {
-    const r = await fetch(apiUrl(action, extra), {
+    const response = await fetch(url, {
+      method: "GET",
       headers: {
-        "user-agent": "Mozilla/5.0 (compatible; P2PlayerM3U/5.0)",
-        "accept": "application/json,*/*",
-        "accept-encoding": "identity"
+        "accept": "application/json",
+        "x-p2-auth-secret": AUTH_SECRET,
+        "user-agent": "P2Player-Xtream-Gateway/1.0"
       },
       redirect: "follow",
       signal: controller.signal
     });
-    if (!r.ok) throw new Error(`${action || "auth"}: HTTP ${r.status}`);
-    const text = await r.text();
-    try { return JSON.parse(text); }
-    catch { throw new Error(`${action || "auth"}: JSON inválido (${text.length} bytes)`); }
-  } catch (e) {
-    if (e?.name === "AbortError") throw new Error(`${action || "auth"}: timeout após ${Math.round(timeoutMs/1000)}s`);
-    throw e;
+
+    const text = await response.text();
+    let data = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Auth retornou resposta inválida (${response.status}).`);
+    }
+
+    const value = {
+      ok: response.ok && data.ok === true,
+      status: String(data.status || (data.ok ? "Active" : "Disabled")),
+      message: String(data.message || ""),
+      validade: String(data.validade || ""),
+      nome: String(data.nome || "")
+    };
+
+    authCache.set(key, {
+      value,
+      expiresAt: now + AUTH_CACHE_SECONDS * 1000
+    });
+
+    return value;
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timeout);
   }
 }
 
-function clean(v) {
-  return String(v ?? "").replace(/[\r\n]+/g, " ").replace(/"/g, "'");
-}
-
-function categoryMap(arr) {
-  const m = new Map();
-  if (Array.isArray(arr)) for (const x of arr)
-    m.set(String(x.category_id ?? ""), clean(x.category_name || "Sem categoria"));
-  return m;
-}
-
-function extinf(name, logo, group, tvgId = "") {
-  return `#EXTINF:-1 tvg-id="${clean(tvgId)}" tvg-name="${clean(name)}" tvg-logo="${clean(logo)}" group-title="${clean(group)}",${clean(name)}\n`;
-}
-
-function determineStreamBase(authData) {
-  if (STREAM_BASE_ENV) return STREAM_BASE_ENV;
-  const s = authData?.server_info || {};
-  const protocol = String(s.server_protocol || "http").replace(":", "");
-  const host = String(s.url || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-  if (!host) return PLAYLIST_BASE;
-  const port = protocol === "https" ? String(s.https_port || s.port || "") : String(s.port || "");
-  const defaultPort = (protocol === "http" && port === "80") || (protocol === "https" && port === "443");
-  return `${protocol}://${host}${port && !defaultPort ? ":" + port : ""}`;
-}
-
-function liveUrl(base, x) {
-  return `${base}/live/${encodeURIComponent(ORIGIN_USERNAME)}/${encodeURIComponent(ORIGIN_PASSWORD)}/${x.stream_id}.${clean(x.container_extension || "m3u8")}`;
-}
-function movieUrl(base, x) {
-  return `${base}/movie/${encodeURIComponent(ORIGIN_USERNAME)}/${encodeURIComponent(ORIGIN_PASSWORD)}/${x.stream_id}.${clean(x.container_extension || "mp4")}`;
-}
-function episodeUrl(base, x) {
-  return `${base}/series/${encodeURIComponent(ORIGIN_USERNAME)}/${encodeURIComponent(ORIGIN_PASSWORD)}/${x.id}.${clean(x.container_extension || "mp4")}`;
-}
-
-async function write(out, text) {
-  if (out.write(text)) return;
-  await new Promise((resolve, reject) => {
-    out.once("drain", resolve);
-    out.once("error", reject);
+async function originJson(action = "", extra = {}) {
+  const params = new URLSearchParams({
+    username: ORIGIN_USERNAME,
+    password: ORIGIN_PASSWORD
   });
-}
-async function finish(out) {
-  out.end();
-  await new Promise((resolve, reject) => {
-    out.once("finish", resolve);
-    out.once("error", reject);
-  });
-}
 
-function flattenEpisodes(info) {
-  const out = [];
-  if (!info?.episodes || typeof info.episodes !== "object") return out;
-  for (const [season, list] of Object.entries(info.episodes)) {
-    if (!Array.isArray(list)) continue;
-    for (const ep of list) out.push({ ...ep, __season: season });
+  if (action) params.set("action", action);
+
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
   }
-  return out;
-}
 
-async function build() {
-  if (state.building) return;
-  state = {
-    ...state,
-    phase: "autenticando",
-    building: true,
-    basicReady: false,
-    fullReady: false,
-    lastError: null,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    live: { total: 0, written: 0 },
-    movies: { total: 0, written: 0 },
-    series: { total: 0, processed: 0, failed: 0, episodesWritten: 0 },
-    basicBytes: 0,
-    fullBytes: 0
-  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    console.log("[V5] 1/6 Autenticando...");
-    const authData = await fetchJson("", {}, 60000);
-    const base = determineStreamBase(authData);
-    state.streamBase = base;
+    const response = await fetch(`${ORIGIN_BASE}/player_api.php?${params.toString()}`, {
+      headers: {
+        "accept": "application/json,*/*",
+        "accept-encoding": "identity",
+        "user-agent": "Mozilla/5.0 (compatible; P2PlayerXtream/1.0)"
+      },
+      redirect: "follow",
+      signal: controller.signal
+    });
 
-    // CANAIS PRIMEIRO
-    state.phase = "baixando_canais";
-    console.log("[V5] 2/6 Buscando canais...");
-    const liveCatsRaw = await fetchJson("get_live_categories", {}, 60000);
-    const liveRaw = await fetchJson("get_live_streams", {}, API_TIMEOUT_MS);
-    const liveCats = categoryMap(liveCatsRaw);
-    const lives = Array.isArray(liveRaw) ? liveRaw : [];
-    state.live.total = lives.length;
-    console.log(`[V5] Canais recebidos: ${lives.length}`);
-
-    // FILMES DEPOIS
-    state.phase = "baixando_filmes";
-    console.log("[V5] 3/6 Buscando filmes...");
-    const movieCatsRaw = await fetchJson("get_vod_categories", {}, 60000);
-    const movieRaw = await fetchJson("get_vod_streams", {}, API_TIMEOUT_MS);
-    const movieCats = categoryMap(movieCatsRaw);
-    const movies = Array.isArray(movieRaw) ? movieRaw : [];
-    state.movies.total = movies.length;
-    console.log(`[V5] Filmes recebidos: ${movies.length}`);
-
-    // LIBERA BASIC ANTES DE TOCAR NAS SÉRIES
-    state.phase = "gerando_basica";
-    console.log("[V5] 4/6 Gerando BASIC...");
-    const basicOut = fs.createWriteStream(BASIC_FILE, { encoding: "utf8" });
-    await write(basicOut, "#EXTM3U\n");
-
-    for (const x of lives) {
-      const name = x.name || `Canal ${x.stream_id}`;
-      const group = liveCats.get(String(x.category_id ?? "")) || "Canais";
-      await write(basicOut,
-        extinf(name, x.stream_icon || "", group, x.epg_channel_id || "") +
-        liveUrl(base, x) + "\n"
-      );
-      state.live.written++;
+    if (!response.ok) {
+      throw new Error(`Origem HTTP ${response.status}`);
     }
 
-    for (const x of movies) {
-      const name = x.name || `Filme ${x.stream_id}`;
-      const group = movieCats.get(String(x.category_id ?? "")) || "Filmes";
-      await write(basicOut,
-        extinf(name, x.stream_icon || "", group) +
-        movieUrl(base, x) + "\n"
-      );
-      state.movies.written++;
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Origem retornou JSON inválido (${text.length} bytes).`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function disabledLogin(username, password, req, message = "Conta inválida ou vencida.") {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    user_info: {
+      username: String(username || ""),
+      password: String(password || ""),
+      message,
+      auth: 0,
+      status: "Disabled",
+      exp_date: "0",
+      is_trial: "0",
+      active_cons: "0",
+      created_at: String(now),
+      max_connections: "3",
+      allowed_output_formats: ["m3u8", "ts", "rtmp"]
+    },
+    server_info: {
+      url: req.hostname || "",
+      port: "443",
+      https_port: "443",
+      server_protocol: "https",
+      rtmp_port: "0",
+      timezone: "America/Sao_Paulo",
+      timestamp_now: now,
+      time_now: new Date().toISOString().replace("T", " ").slice(0, 19)
+    }
+  };
+}
+
+function rewriteLoginResponse(originData, username, password, req, authResult) {
+  const now = Math.floor(Date.now() / 1000);
+  const originUser = originData?.user_info || {};
+  const originServer = originData?.server_info || {};
+
+  let expiry = 0;
+  if (authResult.validade) {
+    const dt = new Date(`${authResult.validade}T23:59:59-03:00`);
+    if (!Number.isNaN(dt.getTime())) expiry = Math.floor(dt.getTime() / 1000);
+  }
+
+  return {
+    ...originData,
+    user_info: {
+      ...originUser,
+      username,
+      password,
+      message: authResult.nome ? `P2 Player • ${authResult.nome}` : "P2 Player",
+      auth: 1,
+      status: "Active",
+      exp_date: expiry > 0 ? String(expiry) : String(originUser.exp_date || "0"),
+      is_trial: String(originUser.is_trial || "0"),
+      active_cons: "0",
+      max_connections: "3",
+      allowed_output_formats: Array.isArray(originUser.allowed_output_formats)
+        ? originUser.allowed_output_formats
+        : ["m3u8", "ts", "rtmp"]
+    },
+    server_info: {
+      ...originServer,
+      url: req.hostname || "",
+      port: "443",
+      https_port: "443",
+      server_protocol: "https",
+      rtmp_port: "0",
+      timezone: originServer.timezone || "America/Sao_Paulo",
+      timestamp_now: now,
+      time_now: new Date().toISOString().replace("T", " ").slice(0, 19)
+    }
+  };
+}
+
+function extractClientCredentials(req) {
+  return {
+    username: String(req.query.username || req.params.username || "").trim(),
+    password: String(req.query.password || req.params.password || "")
+  };
+}
+
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "P2 Player Xtream Gateway",
+    configured: Boolean(
+      ORIGIN_BASE &&
+      ORIGIN_USERNAME &&
+      ORIGIN_PASSWORD &&
+      AUTH_URL &&
+      AUTH_SECRET
+    )
+  });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, uptimeSeconds: Math.floor(process.uptime()) });
+});
+
+app.get("/player_api.php", async (req, res) => {
+  const { username, password } = extractClientCredentials(req);
+  const action = String(req.query.action || "").trim();
+
+  try {
+    const client = await validateClient(username, password);
+
+    if (!client.ok) {
+      if (!action) {
+        return res.status(200).json(
+          disabledLogin(username, password, req, client.message || "Conta inválida ou vencida.")
+        );
+      }
+      return res.status(401).json([]);
     }
 
-    await finish(basicOut);
-    state.basicBytes = fs.statSync(BASIC_FILE).size;
-    state.basicReady = true;
-    console.log(`[V5] BASIC PRONTA: ${(state.basicBytes/1048576).toFixed(2)} MB`);
+    if (!action) {
+      const origin = await originJson("");
+      return res.json(rewriteLoginResponse(origin, username, password, req, client));
+    }
 
-    // SÓ AGORA SÉRIES
-    state.phase = "baixando_series";
-    console.log("[V5] 5/6 Buscando séries...");
-    const seriesCatsRaw = await fetchJson("get_series_categories", {}, 60000);
-    const seriesRaw = await fetchJson("get_series", {}, API_TIMEOUT_MS);
-    const seriesCats = categoryMap(seriesCatsRaw);
-    const series = Array.isArray(seriesRaw) ? seriesRaw : [];
-    state.series.total = series.length;
-    console.log(`[V5] Séries recebidas: ${series.length}`);
+    const allowed = new Set([
+      "get_live_categories",
+      "get_live_streams",
+      "get_vod_categories",
+      "get_vod_streams",
+      "get_vod_info",
+      "get_series_categories",
+      "get_series",
+      "get_series_info",
+      "get_short_epg",
+      "get_simple_data_table"
+    ]);
 
-    await fs.promises.copyFile(BASIC_FILE, BUILD_FILE);
-    const fullOut = fs.createWriteStream(BUILD_FILE, { flags: "a", encoding: "utf8" });
+    if (!allowed.has(action)) {
+      return res.status(400).json({ error: "Ação não suportada." });
+    }
 
-    state.phase = "processando_episodios";
-    console.log(`[V5] 6/6 Episódios; concorrência=${SERIES_CONCURRENCY}`);
-
-    let cursor = 0;
-    async function worker() {
-      while (true) {
-        const i = cursor++;
-        if (i >= series.length) return;
-        const s = series[i];
-
-        try {
-          const info = await fetchJson("get_series_info", { series_id: s.series_id }, SERIES_TIMEOUT_MS);
-          const eps = flattenEpisodes(info);
-          const group = seriesCats.get(String(s.category_id ?? "")) || "Séries";
-          const logo = s.cover || s.stream_icon || "";
-
-          for (const ep of eps) {
-            const season = ep.season ?? ep.__season ?? ep.info?.season ?? "";
-            const number = ep.episode_num ?? ep.info?.episode_num ?? "";
-            const title = clean(ep.title || ep.info?.title || `Episódio ${number}`);
-            const name =
-              `${clean(s.name || "Série")}` +
-              `${season !== "" ? " S" + String(season).padStart(2,"0") : ""}` +
-              `${number !== "" ? "E" + String(number).padStart(2,"0") : ""}` +
-              ` - ${title}`;
-
-            await write(fullOut,
-              extinf(name, logo, group) + episodeUrl(base, ep) + "\n"
-            );
-            state.series.episodesWritten++;
-          }
-        } catch (e) {
-          state.series.failed++;
-          console.error(`[V5 série ${s.series_id}] ${e.message}`);
-        } finally {
-          state.series.processed++;
-          if (state.series.processed % 25 === 0 || state.series.processed === state.series.total) {
-            console.log(`[V5] Séries ${state.series.processed}/${state.series.total} | episódios=${state.series.episodesWritten} | falhas=${state.series.failed}`);
-          }
-        }
+    const extra = {};
+    for (const key of ["category_id","series_id","vod_id","stream_id","limit","start"]) {
+      if (req.query[key] !== undefined && req.query[key] !== "") {
+        extra[key] = req.query[key];
       }
     }
 
-    await Promise.all(Array.from({ length: SERIES_CONCURRENCY }, () => worker()));
-    await finish(fullOut);
-    await fs.promises.rename(BUILD_FILE, FULL_FILE);
+    const data = await originJson(action, extra);
+    return res.json(data);
+  } catch (error) {
+    console.error("[player_api]", action || "login", error?.message || error);
 
-    state.fullBytes = fs.statSync(FULL_FILE).size;
-    state.fullReady = true;
-    state.phase = "pronto";
-    state.finishedAt = new Date().toISOString();
-    console.log(`[V5] FULL PRONTA: ${(state.fullBytes/1048576).toFixed(2)} MB`);
+    if (!action) {
+      return res.status(200).json(
+        disabledLogin(username, password, req, "Servidor temporariamente indisponível.")
+      );
+    }
 
-  } catch (e) {
-    state.lastError = String(e?.message || e);
-    state.phase = "erro";
-    console.error("[V5 ERRO]", state.lastError);
-  } finally {
-    state.building = false;
+    return res.status(502).json({ error: "Falha temporária ao consultar catálogo." });
+  }
+});
+
+app.get("/get.php", async (req, res) => {
+  const { username, password } = extractClientCredentials(req);
+
+  try {
+    const client = await validateClient(username, password);
+    if (!client.ok) {
+      return res.status(401).type("text/plain").send("Conta inválida ou vencida.");
+    }
+
+    const params = new URLSearchParams({
+      username: ORIGIN_USERNAME,
+      password: ORIGIN_PASSWORD,
+      type: String(req.query.type || "m3u_plus"),
+      output: String(req.query.output || "m3u8")
+    });
+
+    return res.redirect(302, `${ORIGIN_BASE}/get.php?${params.toString()}`);
+  } catch (error) {
+    console.error("[get.php]", error?.message || error);
+    return res.status(502).type("text/plain").send("Falha temporária.");
+  }
+});
+
+app.get("/xmltv.php", async (req, res) => {
+  const { username, password } = extractClientCredentials(req);
+
+  try {
+    const client = await validateClient(username, password);
+    if (!client.ok) {
+      return res.status(401).type("text/plain").send("Conta inválida ou vencida.");
+    }
+
+    const params = new URLSearchParams({
+      username: ORIGIN_USERNAME,
+      password: ORIGIN_PASSWORD
+    });
+
+    return res.redirect(302, `${ORIGIN_BASE}/xmltv.php?${params.toString()}`);
+  } catch (error) {
+    console.error("[xmltv]", error?.message || error);
+    return res.status(502).type("text/plain").send("Falha temporária.");
+  }
+});
+
+async function streamRedirect(req, res, kind) {
+  const { username, password } = extractClientCredentials(req);
+
+  try {
+    const client = await validateClient(username, password);
+    if (!client.ok) {
+      return res.status(401).type("text/plain").send("Conta inválida ou vencida.");
+    }
+
+    const id = String(req.params.id || "").replace(/[^0-9A-Za-z_-]/g, "");
+    const ext = String(req.params.ext || (kind === "live" ? "m3u8" : "mp4"))
+      .replace(/[^0-9A-Za-z]/g, "");
+
+    if (!id) {
+      return res.status(400).type("text/plain").send("Stream inválido.");
+    }
+
+    const target =
+      `${ORIGIN_STREAM_BASE}/${kind}/` +
+      `${encodeURIComponent(ORIGIN_USERNAME)}/` +
+      `${encodeURIComponent(ORIGIN_PASSWORD)}/` +
+      `${encodeURIComponent(id)}.${ext}`;
+
+    return res.redirect(302, target);
+  } catch (error) {
+    console.error(`[${kind}]`, error?.message || error);
+    return res.status(502).type("text/plain").send("Falha temporária.");
   }
 }
 
-function status() {
-  return {
-    ...state,
-    basicMB: Number((state.basicBytes/1048576).toFixed(2)),
-    fullMB: Number((state.fullBytes/1048576).toFixed(2)),
-    seriesPercent: state.series.total
-      ? Number((state.series.processed/state.series.total*100).toFixed(2))
-      : 0
-  };
-}
+app.get("/live/:username/:password/:id.:ext", (req, res) => streamRedirect(req, res, "live"));
+app.get("/movie/:username/:password/:id.:ext", (req, res) => streamRedirect(req, res, "movie"));
+app.get("/series/:username/:password/:id.:ext", (req, res) => streamRedirect(req, res, "series"));
 
-function serve(res, file) {
-  if (!fs.existsSync(file))
-    return res.status(503).type("text/plain").send("Playlist ainda nao esta pronta.");
-  const st = fs.statSync(file);
-  res.setHeader("Content-Type", "application/x-mpegURL; charset=utf-8");
-  res.setHeader("Content-Disposition", 'inline; filename="p2player.m3u"');
-  res.setHeader("Content-Length", st.size);
-  res.setHeader("Cache-Control", "private, no-cache");
-  fs.createReadStream(file).pipe(res);
-}
-
-app.get("/", (_q,res) => res.json(status()));
-app.get("/health", (_q,res) => res.json({ok:true,phase:state.phase,basicReady:state.basicReady,fullReady:state.fullReady}));
-app.get("/status", (req,res) => {
-  if (!authorized(req)) return res.status(401).json({ok:false,error:"Token inválido"});
-  res.setHeader("Cache-Control","no-store");
-  res.json(status());
-});
-app.get("/playlist-basic", (req,res) => {
-  if (!authorized(req)) return res.status(401).send("Token inválido");
-  serve(res,BASIC_FILE);
-});
-app.get("/playlist", (req,res) => {
-  if (!authorized(req)) return res.status(401).send("Token inválido");
-  serve(res,FULL_FILE);
-});
-app.post("/refresh", express.json(), (req,res) => {
-  if (!authorized(req)) return res.status(401).json({ok:false});
-  if (!state.building) build();
-  res.status(202).json({ok:true});
+app.use((_req, res) => {
+  res.status(404).json({ ok: false, error: "Rota não encontrada." });
 });
 
-app.get("/monitor", (req,res) => {
-  if (!authorized(req)) return res.status(401).send("Token inválido");
-  const token = JSON.stringify(String(req.query.token || ""));
-  res.setHeader("Cache-Control","no-store");
-  res.type("html").send(`<!doctype html><html lang="pt-BR"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>P2 M3U V5</title><style>
-body{font-family:system-ui;background:#0b0f14;color:#e6edf3;padding:20px;margin:0}
-main{max-width:800px;margin:auto}.card{background:#151b23;border:1px solid #30363d;border-radius:18px;padding:20px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.item{background:#0d1117;padding:13px;border-radius:11px}
-small{display:block;color:#8b949e}.ok{color:#3fb950}.wait{color:#d29922}.err{color:#f85149}a{color:#58a6ff}
-@media(max-width:600px){.grid{grid-template-columns:1fr}}</style></head><body><main><div class="card">
-<h2>P2 Player M3U • V5</h2><h1 id="phase">Carregando...</h1>
-<div class="grid"><div class="item"><small>Canais</small><b id="live">-</b></div>
-<div class="item"><small>Filmes</small><b id="movies">-</b></div>
-<div class="item"><small>Séries</small><b id="series">-</b></div>
-<div class="item"><small>Episódios</small><b id="eps">-</b></div>
-<div class="item"><small>Playlist básica</small><b id="basic">-</b></div>
-<div class="item"><small>Playlist completa</small><b id="full">-</b></div></div>
-<p id="links"></p><p id="error" class="err"></p></div></main>
-<script>
-const token=${token};
-async function update(){
- try{
-  const d=await (await fetch('/status?token='+encodeURIComponent(token),{cache:'no-store'})).json();
-  phase.textContent='Fase: '+d.phase;
-  phase.className=d.phase==='pronto'?'ok':(d.phase==='erro'?'err':'wait');
-  live.textContent=d.live.written+' / '+d.live.total;
-  movies.textContent=d.movies.written+' / '+d.movies.total;
-  series.textContent=d.series.processed+' / '+d.series.total+' ('+d.seriesPercent+'%)';
-  eps.textContent=d.series.episodesWritten;
-  basic.textContent=d.basicReady?d.basicMB+' MB • PRONTA':'aguardando';
-  full.textContent=d.fullReady?d.fullMB+' MB • PRONTA':'aguardando';
-  let x='';
-  if(d.basicReady)x='<a href="/playlist-basic?token='+encodeURIComponent(token)+'">TESTAR BÁSICA</a>';
-  if(d.fullReady)x+=(x?' • ':'')+'<a href="/playlist?token='+encodeURIComponent(token)+'">TESTAR COMPLETA</a>';
-  links.innerHTML=x; error.textContent=d.lastError||'';
- }catch(e){}
-}
-update();setInterval(update,1500);
-</script></body></html>`);
-});
-
-app.listen(PORT,"0.0.0.0",()=>{
-  console.log(`[V5] ativo na porta ${PORT}`);
-  build();
-  setInterval(build,REFRESH_MS);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`[server] P2 Player Xtream Gateway ativo na porta ${PORT}`);
 });

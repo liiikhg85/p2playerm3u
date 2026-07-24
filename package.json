@@ -1,9 +1,16 @@
 {
-  "name": "p2player-m3u-xtream",
-  "version": "5.0.0",
+  "name": "p2player-xtream-gateway",
+  "version": "1.0.0",
   "private": true,
+  "description": "Gateway Xtream Codes do P2 Player",
   "main": "server.js",
-  "scripts": {"start": "node server.js"},
-  "engines": {"node": ">=20"},
-  "dependencies": {"express": "^4.21.2"}
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
 }

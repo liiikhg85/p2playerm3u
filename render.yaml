@@ -9,14 +9,26 @@ services:
     autoDeploy: true
 
     envVars:
-      - key: PLAYLIST_BASE
+      - key: ORIGIN_BASE
+        value: http://ativaronline.pro
+
+      - key: ORIGIN_STREAM_BASE
         value: http://ativaronline.pro
 
       - key: ORIGIN_USERNAME
-        sync: false
+        value: "382664826"
 
       - key: ORIGIN_PASSWORD
-        sync: false
+        value: "960561913"
 
-      - key: ACCESS_TOKEN
-        sync: false
+      - key: AUTH_URL
+        value: https://p2playerweb.gamer.gd/xtream-auth.php
+
+      - key: AUTH_SECRET
+        value: p2playerproxy2026
+
+      - key: AUTH_CACHE_SECONDS
+        value: "30"
+
+      - key: REQUEST_TIMEOUT_MS
+        value: "60000"
