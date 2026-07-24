@@ -1,16 +1,10 @@
 {
   "name": "p2player-m3u-cache",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Gateway M3U com cache em memoria para P2 Player",
+  "description": "P2 Player M3U cache com monitor de progresso",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "express": "^4.21.2"
-  }
+  "scripts": {"start": "node server.js"},
+  "engines": {"node": ">=20"},
+  "dependencies": {"express": "^4.21.2"}
 }

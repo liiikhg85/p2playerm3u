@@ -1,33 +1,26 @@
-P2 PLAYER M3U CACHE V2
+P2 PLAYER M3U CACHE V3
 
-SUBSTITUIR NO GITHUB
-- server.js
-- package.json
-- render.yaml pode permanecer igual; este arquivo também está incluído.
+Substitua server.js e package.json no mesmo repositório do GitHub.
+Aguarde o Render fazer o deploy.
 
-COMO TESTAR
+MONITOR EM TEMPO REAL:
+https://p2player-m3u.onrender.com/monitor?token=SEU_ACCESS_TOKEN
 
-1. Faça commit dos arquivos.
-2. Aguarde o Render concluir o deploy.
-3. Abra:
-   https://p2player-m3u.onrender.com/status?token=SEU_ACCESS_TOKEN
+O monitor atualiza automaticamente a cada 1 segundo e mostra:
+- MB recebidos
+- tamanho total, se a origem informar Content-Length
+- porcentagem
+- velocidade atual
+- velocidade média
+- tempo decorrido
+- horário do último chunk
+- estado do cache
 
-Durante o download:
-   "cacheReady": false
-   "updating": true
+STATUS JSON:
+https://p2player-m3u.onrender.com/status?token=SEU_ACCESS_TOKEN
 
-Quando terminar:
-   "cacheReady": true
-   "updating": false
-   "cacheBytes": número maior que zero
-   "cacheUpdatedAt": data/hora
+PLAYLIST (somente depois de PRONTO/cacheReady=true):
+https://p2player-m3u.onrender.com/playlist?token=SEU_ACCESS_TOKEN
 
-4. SOMENTE depois de cacheReady=true, teste:
-   https://p2player-m3u.onrender.com/playlist?token=SEU_ACCESS_TOKEN
-
-A playlist é baixada integralmente antes de entrar no cache. Enquanto uma
-atualização futura acontece, a versão anterior continua disponível.
-
-OBSERVAÇÃO DO PLANO FREE
-O cache fica na memória da instância. Se o Render desligar a instância por
-inatividade, o cache é perdido e será reconstruído quando o serviço acordar.
+O código não impõe limite artificial de velocidade. A velocidade final depende
+principalmente de quanto a origem consegue enviar para o Render.
