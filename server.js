@@ -147,6 +147,29 @@ function fillTemplate(tpl,s,extra={}){
     .replaceAll("{ext}",String(extra.ext??""));
 }
 
+
+function buildLiveTarget(s,id,requestedExt="m3u8"){
+  const ext=String(requestedExt||"m3u8").toLowerCase()==="ts" ? "ts" : "m3u8";
+  let tpl=String(s.live_template||"{server}/live/{user}/{pass}/{id}.{ext}");
+
+  /*
+    Se o painel usa {ext}, respeita diretamente.
+    Se o template está fixo em .m3u8 e o app pediu .ts,
+    tenta o equivalente .ts da origem.
+  */
+  if(tpl.includes("{ext}")){
+    return fillTemplate(tpl,s,{id,ext});
+  }
+
+  let target=fillTemplate(tpl,s,{id,ext});
+
+  if(ext==="ts"){
+    target=target.replace(/\.m3u8(?=($|\?))/i,".ts");
+  }
+
+  return target;
+}
+
 function isExpired(validade){
   const v=String(validade||"").trim();
   if(!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
@@ -195,7 +218,7 @@ async function fetchWithTimeout(url,opts={},timeoutMs=REQUEST_TIMEOUT_MS){
       ...opts,
       signal:controller.signal,
       headers:{
-        "user-agent":"Mozilla/5.0 (compatible; P2PlayerGateway/6.1)",
+        "user-agent":"Mozilla/5.0 (compatible; P2PlayerGateway/6.2)",
         "accept":"*/*",
         "accept-encoding":"identity",
         ...(opts.headers||{})
@@ -241,7 +264,7 @@ function disabledLogin(username,password,req,message="Conta inválida ou vencida
     user_info:{
       username,password,message,auth:0,status:"Disabled",exp_date:"0",
       is_trial:"0",active_cons:"0",created_at:String(now),max_connections:"3",
-      allowed_output_formats:["m3u8","ts","rtmp"]
+      allowed_output_formats:["m3u8","ts"]
     },
     server_info:{
       url:req.hostname||"",port:"443",https_port:"443",server_protocol:"https",
@@ -268,7 +291,7 @@ function activeLogin(originData,username,password,req,client){
       message:client.nome?`P2 Player • ${client.nome}`:"P2 Player",
       auth:1,status:"Active",exp_date:expiry?String(expiry):String(ou.exp_date||"0"),
       active_cons:"0",max_connections:"3",
-      allowed_output_formats:Array.isArray(ou.allowed_output_formats)?ou.allowed_output_formats:["m3u8","ts","rtmp"]
+      allowed_output_formats:["m3u8","ts"]
     },
     server_info:{
       ...osrv,url:req.hostname||"",port:"443",https_port:"443",server_protocol:"https",
@@ -446,7 +469,7 @@ app.get("/",async (_req,res)=>{
     const s=await getActiveServer();
     res.json({
       ok:true,
-      service:"P2 Player Universal Gateway V6.1",
+      service:"P2 Player Universal Gateway V6.2",
       activeServer:{id:s.id,nome:s.nome},
       usersCached:Array.isArray(usersCache.data),
       configLoadedAt:serversCache.loadedAt
@@ -563,11 +586,7 @@ app.get(
         return res.status(400).send("ID inválido.");
       }
 
-      const target=fillTemplate(
-        s.live_template,
-        s,
-        {id:parsed.id,ext:parsed.ext}
-      );
+      const target=buildLiveTarget(s,parsed.id,parsed.ext);
 
       return await proxyUpstream(
         req,
@@ -638,11 +657,7 @@ app.get(
         return res.status(400).send("ID inválido.");
       }
 
-      const target=fillTemplate(
-        s.live_template,
-        s,
-        {id:parsed.id,ext:parsed.ext}
-      );
+      const target=buildLiveTarget(s,parsed.id,parsed.ext);
 
       return await proxyUpstream(
         req,
@@ -700,5 +715,5 @@ app.get("/movie/:username/:password/:id.:ext",(req,res)=>vodRoute(req,res,"movie
 app.get("/series/:username/:password/:id.:ext",(req,res)=>vodRoute(req,res,"series"));
 
 app.listen(PORT,"0.0.0.0",()=>{
-  console.log(`[server] P2 Player Universal Gateway V6.1 ativo na porta ${PORT}`);
+  console.log(`[server] P2 Player Universal Gateway V6.2 ativo na porta ${PORT}`);
 });
