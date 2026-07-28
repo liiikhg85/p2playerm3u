@@ -195,7 +195,7 @@ async function fetchWithTimeout(url,opts={},timeoutMs=REQUEST_TIMEOUT_MS){
       ...opts,
       signal:controller.signal,
       headers:{
-        "user-agent":"Mozilla/5.0 (compatible; P2PlayerGateway/6.0)",
+        "user-agent":"Mozilla/5.0 (compatible; P2PlayerGateway/6.1)",
         "accept":"*/*",
         "accept-encoding":"identity",
         ...(opts.headers||{})
@@ -294,6 +294,19 @@ function absoluteUrl(value,base){
 }
 async function writeDrain(res,data){
   if(!res.write(data)) await once(res,"drain");
+}
+
+
+function parseLiveIdAndExt(rawValue, fallbackExt="m3u8"){
+  const raw=String(rawValue||"").trim();
+  const m=raw.match(/^(.+?)(?:\.(m3u8|ts))?$/i);
+
+  let id=String(m?.[1] || raw).replace(/[^0-9A-Za-z_-]/g,"");
+  let ext=String(m?.[2] || fallbackExt).toLowerCase();
+
+  if(!["m3u8","ts"].includes(ext)) ext=fallbackExt;
+
+  return {id,ext};
 }
 
 function publicBase(req){
@@ -433,7 +446,7 @@ app.get("/",async (_req,res)=>{
     const s=await getActiveServer();
     res.json({
       ok:true,
-      service:"P2 Player Universal Gateway V6",
+      service:"P2 Player Universal Gateway V6.1",
       activeServer:{id:s.id,nome:s.nome},
       usersCached:Array.isArray(usersCache.data),
       configLoadedAt:serversCache.loadedAt
@@ -518,21 +531,56 @@ app.get("/get.php",async (req,res)=>{
 });
 
 // Web player: mantém compatibilidade com https://p2player-proxy.../live/ID?token=...
-app.get(["/live/:id","/live/:id.m3u8"],async (req,res,next)=>{
-  if(req.params.username) return next();
-  const token=String(req.query.token||"");
-  if(!token || token!==ACCESS_TOKEN) return res.status(401).send("Token inválido.");
+app.get(
+  ["/live/:id.m3u8","/live/:id.ts","/live/:id"],
+  async (req,res,next)=>{
+    if(req.params.username) return next();
 
-  try{
-    const s=await getActiveServer();
-    const id=String(req.params.id||"").replace(/[^0-9A-Za-z_-]/g,"");
-    const target=fillTemplate(s.live_template,s,{id,ext:"m3u8"});
-    return await proxyUpstream(req,res,target,t=>tokenResourceUrl(req,t));
-  }catch(e){
-    console.error("[web-live]",String(e?.message||e));
-    if(!res.headersSent) res.status(502).send("Falha no canal.");
+    const token=String(req.query.token||"");
+    if(!token || token!==ACCESS_TOKEN){
+      return res.status(401).send("Token inválido.");
+    }
+
+    try{
+      const s=await getActiveServer();
+
+      /*
+        Importante:
+        /live/238
+        /live/238.m3u8
+        /live/238.ts
+        são tratados como o MESMO stream_id 238.
+
+        O template cadastrado no painel continua decidindo o formato
+        usado na origem.
+      */
+      const parsed=parseLiveIdAndExt(
+        req.params.id,
+        req.path.toLowerCase().endsWith(".ts") ? "ts" : "m3u8"
+      );
+
+      if(!parsed.id){
+        return res.status(400).send("ID inválido.");
+      }
+
+      const target=fillTemplate(
+        s.live_template,
+        s,
+        {id:parsed.id,ext:parsed.ext}
+      );
+
+      return await proxyUpstream(
+        req,
+        res,
+        target,
+        t=>tokenResourceUrl(req,t)
+      );
+    }catch(e){
+      console.error("[web-live]",String(e?.message||e));
+      if(!res.headersSent) res.status(502).send("Falha no canal.");
+    }
   }
-});
+);
 
 app.get("/resource",async (req,res)=>{
   const token=String(req.query.token||"");
@@ -554,23 +602,60 @@ app.get("/resource",async (req,res)=>{
 });
 
 // Xtream dos clientes: live via HTTPS gateway.
-app.get(["/live/:username/:password/:id","/live/:username/:password/:id.:ext"],async (req,res)=>{
-  const {username,password}=credentials(req);
+app.get(
+  [
+    "/live/:username/:password/:id.m3u8",
+    "/live/:username/:password/:id.ts",
+    "/live/:username/:password/:id"
+  ],
+  async (req,res)=>{
+    const {username,password}=credentials(req);
 
-  try{
-    const client=await validateClient(username,password);
-    if(!client.ok) return res.status(401).send("Conta inválida ou vencida.");
+    try{
+      const client=await validateClient(username,password);
 
-    const s=await getActiveServer();
-    const id=String(req.params.id||"").replace(/[^0-9A-Za-z_-]/g,"");
-    const ext=String(req.params.ext||"m3u8").replace(/[^0-9A-Za-z]/g,"") || "m3u8";
-    const target=fillTemplate(s.live_template,s,{id,ext});
-    return await proxyUpstream(req,res,target,t=>clientRelayUrl(req,username,password,t));
-  }catch(e){
-    console.error("[client-live]",String(e?.message||e));
-    if(!res.headersSent) res.status(502).send("Falha no canal.");
+      if(!client.ok){
+        return res.status(401).send("Conta inválida ou vencida.");
+      }
+
+      const s=await getActiveServer();
+
+      /*
+        Compatibilidade Xtream:
+          /live/user/pass/238
+          /live/user/pass/238.m3u8
+          /live/user/pass/238.ts
+
+        Todos preservam stream_id=238.
+        A rota SEM extensão continua exatamente como estava funcionando.
+      */
+      const parsed=parseLiveIdAndExt(
+        req.params.id,
+        req.path.toLowerCase().endsWith(".ts") ? "ts" : "m3u8"
+      );
+
+      if(!parsed.id){
+        return res.status(400).send("ID inválido.");
+      }
+
+      const target=fillTemplate(
+        s.live_template,
+        s,
+        {id:parsed.id,ext:parsed.ext}
+      );
+
+      return await proxyUpstream(
+        req,
+        res,
+        target,
+        t=>clientRelayUrl(req,username,password,t)
+      );
+    }catch(e){
+      console.error("[client-live]",String(e?.message||e));
+      if(!res.headersSent) res.status(502).send("Falha no canal.");
+    }
   }
-});
+);
 
 app.get("/relay/:username/:password",async (req,res)=>{
   const {username,password}=credentials(req);
@@ -615,5 +700,5 @@ app.get("/movie/:username/:password/:id.:ext",(req,res)=>vodRoute(req,res,"movie
 app.get("/series/:username/:password/:id.:ext",(req,res)=>vodRoute(req,res,"series"));
 
 app.listen(PORT,"0.0.0.0",()=>{
-  console.log(`[server] P2 Player Universal Gateway V6 ativo na porta ${PORT}`);
+  console.log(`[server] P2 Player Universal Gateway V6.1 ativo na porta ${PORT}`);
 });
