@@ -1,39 +1,29 @@
 services:
   - type: web
-    name: p2player-m3u
+    name: p2player-proxy
     runtime: node
     plan: free
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
-    autoDeploy: true
-
     envVars:
-      - key: ORIGIN_API_BASE
-        value: http://ativaronline.pro
-      - key: LIVE_STREAM_BASE
-        value: http://main.fashion:80
-      - key: VOD_STREAM_BASE
-        value: http://ativaronline.pro
-      - key: ORIGIN_USERNAME
-        value: "382664826"
-      - key: ORIGIN_PASSWORD
-        value: "960561913"
       - key: FTP_HOST
         value: ftpupload.net
       - key: FTP_PORT
         value: "21"
       - key: FTP_USER
-        value: "if0_42448464"
+        value: if0_42448464
       - key: FTP_PASSWORD
-        value: "P2playerweb"
+        sync: false
       - key: FTP_USERS_PATH
         value: /htdocs/usuarios.json
+      - key: FTP_SERVERS_PATH
+        value: /htdocs/servidores/servidores.json
+      - key: ACCESS_TOKEN
+        value: p2player2026
       - key: USERS_CACHE_SECONDS
         value: "30"
-      - key: CATALOG_CACHE_SECONDS
-        value: "300"
-      - key: CATEGORY_CONCURRENCY
-        value: "4"
-      - key: REQUEST_TIMEOUT_MS
-        value: "60000"
+      - key: SERVERS_CACHE_SECONDS
+        value: "15"
+      - key: API_CACHE_SECONDS
+        value: "60"
